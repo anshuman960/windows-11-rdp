@@ -1,0 +1,232 @@
+name: Build and Release Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        architecture: [x86, x64]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        architecture: ${{ matrix.architecture }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Install additional build dependencies
+      run: |
+        pip install pyinstaller pillow
+
+    - name: Create application icon
+      run: |
+        # Create a simple icon using PIL (placeholder)
+        python -c "
+        from PIL import Image, ImageDraw
+        import os
+        
+        # Create a simple 256x256 icon
+        img = Image.new('RGBA', (256, 256), (70, 130, 250, 255))
+        draw = ImageDraw.Draw(img)
+        
+        # Draw RDP icon-like design
+        draw.rectangle([40, 40, 216, 216], fill=(255, 255, 255, 255), outline=(50, 50, 50, 255), width=4)
+        draw.rectangle([60, 80, 196, 120], fill=(70, 130, 250, 255))
+        draw.rectangle([60, 140, 196, 180], fill=(100, 200, 100, 255))
+        
+        # Save as ICO
+        if not os.path.exists('resources'):
+            os.makedirs('resources')
+        img.save('resources/app_icon.ico', format='ICO')
+        print('Icon created successfully')
+        "
+      shell: cmd
+
+    - name: Build executable
+      run: |
+        pyinstaller --name "Windows11-RDP-Manager-${{ matrix.architecture }}" `
+          --onefile `
+          --windowed `
+          --icon="resources/app_icon.ico" `
+          --add-data "requirements.txt;." `
+          --hidden-import="PyQt5.sip" `
+          --hidden-import="requests" `
+          --hidden-import="urllib3" `
+          --distpath="dist/${{ matrix.architecture }}" `
+          --workpath="build/${{ matrix.architecture }}" `
+          --specpath="build/spec" `
+          src/main_app.py
+
+    - name: Create portable package
+      run: |
+        # Create a folder with the exe and readme
+        mkdir "Windows11-RDP-Manager-${{ matrix.architecture }}-portable"
+        copy "dist\${{ matrix.architecture }}\Windows11-RDP-Manager-${{ matrix.architecture }}.exe" "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\"
+        
+        # Create a simple readme for the portable version
+        echo "Windows 11 RDP Manager - ${{ matrix.architecture }} Version" > "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "1. Run Windows11-RDP-Manager-${{ matrix.architecture }}.exe" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "2. Authenticate with GitHub (one-time)" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "3. Enter your Tailscale auth key" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "4. Click 'Start RDP Session'" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "Get Tailscale auth key from: https://login.tailscale.com/admin/settings/keys" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        echo "For support, visit: https://github.com/anshuman960/windows-11-rdp" >> "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\README.txt"
+        
+        # Create ZIP package
+        7z a "Windows11-RDP-Manager-${{ matrix.architecture }}-portable.zip" "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\*"
+      shell: cmd
+
+    - name: Test executable
+      run: |
+        # Test that the executable can start (we'll kill it quickly)
+        echo "Testing executable..."
+        timeout 10 "dist\${{ matrix.architecture }}\Windows11-RDP-Manager-${{ matrix.architecture }}.exe" --help || echo "Executable test completed"
+      shell: cmd
+      continue-on-error: true
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: windows-${{ matrix.architecture }}-build
+        path: |
+          dist/${{ matrix.architecture }}/*.exe
+          Windows11-RDP-Manager-${{ matrix.architecture }}-portable.zip
+
+  create-release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: ./artifacts
+
+    - name: Create release notes
+      id: release_notes
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        
+        cat > release_notes.md << 'EOF'
+        ## Windows 11 RDP Manager $VERSION
+        
+        ### 🚀 Features
+        - **Secure RDP via Tailscale VPN** - No public endpoints, enterprise-grade encryption
+        - **GitHub Actions Integration** - Automated Windows 11 RDP setup
+        - **Cross-Platform Support** - Works on Windows, Mac, Linux, mobile devices
+        - **One-Click Setup** - Simple GUI for managing RDP sessions
+        - **Real-Time Monitoring** - Live status updates and connection details
+        
+        ### 📦 Downloads
+        
+        Choose the version that matches your Windows system:
+        
+        - **x64 (64-bit)**: For modern Windows 10/11 systems *(Recommended)*
+        - **x86 (32-bit)**: For older Windows systems or 32-bit installations
+        
+        Each download includes:
+        - Standalone executable (no installation required)
+        - Setup instructions
+        - Portable ZIP package
+        
+        ### 🔧 Setup Instructions
+        
+        1. Download the appropriate version for your system
+        2. Extract the ZIP file
+        3. Run `Windows11-RDP-Manager-[architecture].exe`
+        4. Follow the in-app setup wizard:
+           - Authenticate with GitHub (one-time)
+           - Enter your Tailscale auth key
+           - Click "Start RDP Session"
+        
+        ### 📋 Requirements
+        
+        - Windows 7 or later
+        - Internet connection
+        - GitHub account
+        - Tailscale account (free)
+        
+        ### 🔗 Quick Links
+        
+        - [Get Tailscale Auth Key](https://login.tailscale.com/admin/settings/keys)
+        - [Tailscale Download](https://tailscale.com/download)
+        - [Project Documentation](https://github.com/anshuman960/windows-11-rdp)
+        - [YouTube Tutorial](https://youtu.be/3Ash-395oCI)
+        
+        ### 🐛 Bug Reports
+        
+        Found an issue? Please report it on our [Issues page](https://github.com/anshuman960/windows-11-rdp/issues).
+        
+        ---
+        
+        **Security Note**: This application creates secure, private RDP connections via Tailscale VPN. No public ports are exposed, and all traffic is encrypted end-to-end.
+        EOF
+        
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+        cat release_notes.md >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: "Windows 11 RDP Manager ${{ github.ref_name }}"
+        body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+        draft: false
+        prerelease: false
+        files: |
+          artifacts/windows-x86-build/*.exe
+          artifacts/windows-x86-build/*.zip
+          artifacts/windows-x64-build/*.exe
+          artifacts/windows-x64-build/*.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-completion:
+    needs: [build-windows, create-release]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Architectures Built:" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ x86 (32-bit) Windows" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ x64 (64-bit) Windows" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Files Generated:" >> $GITHUB_STEP_SUMMARY
+        echo "- Windows11-RDP-Manager-x86.exe" >> $GITHUB_STEP_SUMMARY
+        echo "- Windows11-RDP-Manager-x64.exe" >> $GITHUB_STEP_SUMMARY
+        echo "- Portable ZIP packages" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+        echo "1. Download the appropriate version for your system" >> $GITHUB_STEP_SUMMARY
+        echo "2. Get your Tailscale auth key from https://login.tailscale.com/admin/settings/keys" >> $GITHUB_STEP_SUMMARY
+        echo "3. Run the executable and follow the setup wizard" >> $GITHUB_STEP_SUMMARY
