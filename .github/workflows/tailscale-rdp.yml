@@ -1,0 +1,166 @@
+name: Windows 11 RDP with Tailscale
+
+on:
+  workflow_dispatch:
+    inputs:
+      rdp_password:
+        description: 'Custom RDP Password (optional)'
+        required: false
+        default: 'P@ssw0rd123!'
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAILSCALE_AUTH_TOKEN: ${{ secrets.TAILSCALE_AUTH_TOKEN }}
+  RDP_USER: runneradmin
+  RDP_PASS: ${{ inputs.rdp_password }}
+
+jobs:
+  windows-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download Tailscale
+      run: |
+        Write-Host "Downloading Tailscale..."
+        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-1.62.0.exe -OutFile tailscale-setup.exe
+        Write-Host "Download completed"
+      shell: powershell
+
+    - name: Install Tailscale
+      run: |
+        Write-Host "Installing Tailscale..."
+        .\tailscale-setup.exe /install /quiet
+        Start-Sleep -Seconds 30  # Wait for installation
+        Write-Host "Installation completed"
+      shell: powershell
+
+    - name: Authenticate Tailscale
+      run: |
+        Write-Host "Authenticating with Tailscale..."
+        # Add Tailscale to PATH
+        $env:PATH = "$env:PATH;C:\Program Files\Tailscale"
+        
+        # Connect to Tailscale network
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $env:TAILSCALE_AUTH_TOKEN --hostname "github-rdp-$(Get-Date -Format 'yyyyMMdd-HHmmss')" --accept-routes
+        
+        Write-Host "Tailscale connection established"
+      shell: powershell
+      env:
+        TAILSCALE_AUTH_TOKEN: ${{ secrets.TAILSCALE_AUTH_TOKEN }}
+
+    - name: Enable Remote Desktop
+      run: |
+        Write-Host "Enabling Remote Desktop..."
+        # Enable Terminal Services
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        
+        # Enable Remote Desktop through Windows Firewall
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        
+        # Enable Network Level Authentication
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        
+        # Set RDP password for runneradmin user
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "$env:RDP_PASS" -Force)
+        
+        Write-Host "Remote Desktop enabled successfully"
+        Write-Host "Username: $env:RDP_USER"
+        Write-Host "Password: $env:RDP_PASS"
+      shell: powershell
+
+    - name: Get Tailscale IP and Display Connection Info
+      run: |
+        Write-Host "Getting Tailscale IP address..."
+        
+        # Add Tailscale to PATH
+        $env:PATH = "$env:PATH;C:\Program Files\Tailscale"
+        
+        # Get Tailscale IP
+        $tailscaleIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+        
+        $connectionInfo = @"
+        ==========================================
+        🚀 TAILSCALE RDP CONNECTION ESTABLISHED!
+        ==========================================
+        Tailscale IP: $tailscaleIP
+        Username: $env:RDP_USER
+        Password: $env:RDP_PASS
+        ==========================================
+        
+        How to connect:
+        1. Install Tailscale on your device from tailscale.com
+        2. Login with the same account you used for this setup
+        3. Open Remote Desktop Connection
+        4. Connect to: $tailscaleIP
+        5. Use the credentials above
+        
+        Session will remain active for up to 6 hours.
+        Your RDP is now securely accessible via Tailscale VPN!
+        ==========================================
+        "@
+        
+        Write-Host $connectionInfo
+        
+        # Save to file for reference
+        $connectionInfo | Out-File -FilePath "tailscale_rdp_info.txt" -Encoding UTF8
+      shell: powershell
+
+    - name: Display System Information
+      run: |
+        Write-Host "=== System Information ==="
+        Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, TotalPhysicalMemory, CsProcessors | Format-List
+        
+        Write-Host "=== Network Configuration ==="
+        Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | Format-Table
+        
+        Write-Host "=== Tailscale Status ==="
+        $env:PATH = "$env:PATH;C:\Program Files\Tailscale"
+        & "C:\Program Files\Tailscale\tailscale.exe" status
+        
+        Write-Host "=== Available Software ==="
+        Write-Host "- Google Chrome"
+        Write-Host "- Microsoft Edge"
+        Write-Host "- Visual Studio Code"
+        Write-Host "- Git"
+        Write-Host "- Node.js"
+        Write-Host "- Python"
+        Write-Host "- PowerShell 7"
+        Write-Host "- Windows Terminal"
+      shell: powershell
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Keeping Tailscale RDP session alive..."
+        Write-Host "This workflow will run for up to 6 hours."
+        Write-Host "You can cancel the workflow to stop the RDP session."
+        Write-Host ""
+        Write-Host "Current time: $(Get-Date)"
+        Write-Host "Session will automatically end at: $((Get-Date).AddHours(6))"
+        
+        # Keep the session alive by running a loop
+        $endTime = (Get-Date).AddHours(6)
+        while ((Get-Date) -lt $endTime) {
+            Write-Host "Tailscale RDP active - $(Get-Date) - Time remaining: $(($endTime - (Get-Date)).ToString('hh\:mm\:ss'))"
+            
+            # Check Tailscale status every 5 minutes
+            $env:PATH = "$env:PATH;C:\Program Files\Tailscale"
+            $tailscaleStatus = & "C:\Program Files\Tailscale\tailscale.exe" status --json 2>$null
+            if ($tailscaleStatus) {
+                Write-Host "Tailscale connection healthy"
+            } else {
+                Write-Host "Warning: Tailscale connection issue detected"
+            }
+            
+            Start-Sleep -Seconds 300  # Check every 5 minutes
+        }
+        
+        Write-Host "Session timeout reached. Ending Tailscale RDP session."
+      shell: powershell
