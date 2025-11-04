@@ -73,7 +73,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path "Windows11-RDP-Manager-${{ matrix.architecture }}-portable" | Out-Null
         Copy-Item "dist\${{ matrix.architecture }}\Windows11-RDP-Manager-${{ matrix.architecture }}.exe" "Windows11-RDP-Manager-${{ matrix.architecture }}-portable\" -Force
         @"
-Windows 11 RDP Manager - ${{ matrix.architecture }} Version
+RDP-Manager-anshuman960 - ${{ matrix.architecture }} Version
 
 1. Run Windows11-RDP-Manager-${{ matrix.architecture }}.exe
 2. Authenticate with GitHub (one-time)
